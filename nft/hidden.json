@@ -1,0 +1,27 @@
+{
+  "name": "Hidden Nebuloid",
+  "image": "ipfs://bafybeid5k6qkzb4k2wdqg7ctyp7hrd3dhwrwc7rv3opczxnasahqwb3jea",
+  "description": "A hidden nebuloid ready to rule the stables of the universe.",
+  "attributes": [
+    {
+      "trait_type": "Team", 
+      "value": "?"
+    },
+    {
+      "trait_type": "Species", 
+      "value": "?"
+    },
+    {
+      "trait_type": "Eyes",
+      "value": "?"
+    },
+    {
+      "trait_type": "Gender",
+      "value": "?"
+    },
+    {
+      "trait_type": "Background",
+      "value": "?"
+    }
+  ]
+}
