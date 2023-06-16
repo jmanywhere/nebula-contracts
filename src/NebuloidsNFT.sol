@@ -199,6 +199,7 @@ contract NebuloidsNFT is ERC721, Owned {
         _tokenId; // silence unused variable warning
         // all IDS are the same royalty
         if (royaltyReceiver == address(0)) receiver = owner;
+        else receiver = royaltyReceiver;
 
         royaltyAmount = (_salePrice * royaltyFee) / ROYALTY_BASE;
     }

@@ -130,4 +130,15 @@ contract NFTTest is Test {
         assertEq(nft.roundIdOf(6), 2);
         assertEq(nft.roundIdOf(9), 2);
     }
+
+    function test_royaltyCalculation() public {
+        (address receiver, uint256 amount) = nft.royaltyInfo(1, 0.1 ether);
+        assertEq(receiver, address(this));
+        assertEq(amount, (0.1 ether * 7) / 100);
+
+        nft.setRoyaltyReceiver(address(1));
+        (receiver, amount) = nft.royaltyInfo(1, 0.1 ether);
+        assertEq(receiver, address(1));
+        assertEq(amount, (0.1 ether * 7) / 100);
+    }
 }
