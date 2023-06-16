@@ -102,4 +102,32 @@ contract NFTTest is Test {
         nft.setUri(1, "stuffWhoo/");
         assertEq(nft.tokenURI(1), "stuffWhoo/1");
     }
+
+    function test_nextRoundIsOK() public {
+        nft.startRound(5, 0.1 ether, "");
+
+        nft.transferOwnership(address(1));
+        vm.startPrank(address(1));
+        nft.mint(5);
+        assertEq(nft.balanceOf(address(1)), 5);
+
+        nft.startRound(10, 0.1 ether, "");
+
+        (, uint start, uint total, uint minted, ) = nft.rounds(2);
+        assertEq(start, 6);
+        assertEq(total, 10);
+        assertEq(minted, 0);
+
+        nft.mint(4);
+        assertEq(nft.balanceOf(address(1)), 9);
+        vm.stopPrank();
+
+        (, , , minted, ) = nft.rounds(2);
+
+        assertEq(minted, 4);
+        assertEq(nft.totalSupply(), 9);
+
+        assertEq(nft.roundIdOf(6), 2);
+        assertEq(nft.roundIdOf(9), 2);
+    }
 }

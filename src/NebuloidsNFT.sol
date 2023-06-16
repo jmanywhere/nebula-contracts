@@ -58,7 +58,7 @@ contract NebuloidsNFT is ERC721, Owned {
     //-------------------------------------
     //    State Variables
     //-------------------------------------
-    mapping(uint256 _id => uint256 _roundId) private roundIdOf;
+    mapping(uint256 _id => uint256 _roundId) public roundIdOf;
     mapping(uint256 _roundId => RoundId _round) public rounds;
     // A user can only mint a max of 5 NFTs per round
     mapping(address => mapping(uint256 => uint8)) public userMints;
@@ -118,6 +118,7 @@ contract NebuloidsNFT is ERC721, Owned {
 
             _safeMint(msg.sender, id);
         }
+        totalSupply += amount;
         // check that amount is added to the minting reward
         userMints[msg.sender][currentRound] += uint8(amount);
         round.minted += amount;
