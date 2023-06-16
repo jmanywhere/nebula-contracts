@@ -155,6 +155,10 @@ contract NebuloidsNFT is ERC721, Owned {
         if (!succ) revert Nebuloids__FailToClaimFunds();
     }
 
+    function setRoyaltyReceiver(address _royaltyReceiver) external onlyOwner {
+        royaltyReceiver = _royaltyReceiver;
+    }
+
     //-----------------------------------------
     //    Public Functions
     //-----------------------------------------
