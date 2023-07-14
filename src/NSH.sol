@@ -10,18 +10,21 @@ import "openzeppelin/token/ERC20/ERC20.sol";
 //-----------------------------------------------
 error NSH__Insufficient_Allowance();
 error NSH__OverSupplyMint();
+error NSH__InvalidTaxes(uint _buy, uint _sell, uint _transfer);
 
 contract NSH is ERC20, AccessControl {
     //-----------------------------------------------
     // State Variables
     //-----------------------------------------------
     bytes32 private constant MINTER_ROLE = keccak256("MINTER_ROLE");
+    bytes32 private constant FEE_MANAGER_ROLE = keccak256("FEE_MANAGER");
+
     mapping(address => bool) private s_lpAddresses;
     mapping(address => bool) private s_excludeFromFee;
 
-    uint private constant s_buyFee = 7;
-    uint private constant s_sellFee = 7;
-    uint private constant s_transferFee = 2;
+    uint private s_buyFee = 7;
+    uint private s_sellFee = 7;
+    uint private s_transferFee = 2;
     uint private constant BASE_PERCENTAGE = 100;
     uint public constant MAX_SUPPLY = 10_000_000_000 ether;
     uint public constant PRE_MINT = 1_500_000_000 ether;
@@ -128,6 +131,21 @@ contract NSH is ERC20, AccessControl {
         );
         s_excludeFromFee[_addressToExclude] = status;
         emit SetExcludedAddress(_addressToExclude, status);
+    }
+
+    function setTaxes(
+        uint _newBuy,
+        uint _newSell,
+        uint _newTransfer
+    ) external onlyRole(FEE_MANAGER_ROLE) {
+        if (_newBuy > 15 || _newSell > 15 || _newTransfer > 15)
+            revert NSH__InvalidTaxes(_newBuy, _newSell, _newTransfer);
+        emit SetBuyFee(msg.sender, s_buyFee, _newBuy);
+        emit SetSellFee(msg.sender, s_sellFee, _newSell);
+        emit SetTxFee(msg.sender, s_transferFee, _newTransfer);
+        s_buyFee = _newBuy;
+        s_sellFee = _newSell;
+        s_transferFee = _newTransfer;
     }
 
     //-----------------------------------------------
