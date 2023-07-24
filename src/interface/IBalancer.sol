@@ -20,6 +20,9 @@ interface IBalancer is IPeg {
     // Enums
     //-----------------------------------------------
     enum CollateralRange {
+        //What affects collateral (minting, burning, expansion {seignorage}, issuing bonds, redeeming bonds)
+        // NOTE Collateral Range need to take bonds as being 1 NUSD each for collateral range calculations
+        // NOTE In RECOVERY state, burning NUSD for collateral should be disabled and only bonds should be issued
         TOO_LOW,
         UNDER_RANGE,
         IN_RANGE0,
@@ -58,8 +61,13 @@ interface IBalancer is IPeg {
      * @param _token Token address of collateral being added
      * @param amount amount to tokens to add as collateral
      * @dev This function can be toggled on and off based on current peg state
+     *    - NEED TO DISTINGUISH BETWEEN STABLE COLLATERAL AND NON STABLE COLLATERAL ADDED
+     *    - if _token == 0, then ETH is being added as collateral
+     *    - else msg.value should be 0
      */
-    function addCollateral(address _token, uint amount) external;
+    function addCollateral(address _token, uint amount) external payable;
+
+    // TODO HOW TO LIQUIDATE UNDERCOLLATERALIZED POSITIONS
 
     /**
      * @notice Redeems NUSD for collateral
@@ -100,4 +108,6 @@ interface IBalancer is IPeg {
         PegState _peg,
         CollateralRange _range
     ) external view returns (TaxStructure memory);
+
+    function getCollateralRatio() external view returns (uint);
 }
