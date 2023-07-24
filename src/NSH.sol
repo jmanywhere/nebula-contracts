@@ -48,7 +48,7 @@ contract NSH is ERC20, AccessControl {
         _mint(msg.sender, PRE_MINT);
 
         // Setup admin and fee manager roles
-        grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
     //-----------------------------------------------
