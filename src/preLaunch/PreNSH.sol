@@ -16,8 +16,10 @@ error pNSH__Invalid_Address();
 error pNSH__Invalid_Distribution();
 
 contract pNSH is ERC20, Ownable {
-    mapping(address user => bool status) public isExcludedFromFee;
-    mapping(address user => bool status) public isLPAddress;
+    // user = > status
+    mapping(address => bool) public isExcludedFromFee;
+    // user = > status
+    mapping(address => bool) public isLPAddress;
     IWadingPool public wadingPool;
     IUniswapV2Router02 public uniswapV2Router;
     address public mainPair;
