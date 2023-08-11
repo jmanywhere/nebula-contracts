@@ -5,12 +5,28 @@ import "openzeppelin/token/ERC20/IERC20.sol";
 import "openzeppelin/access/Ownable.sol";
 import "./IWadingPool.sol";
 
-error WadingPool__Invalid_WithdrawDate();
+error WadingPool__Already_Claimed();
+error WadingPool__Invalid_NSH();
 
 contract WadingPool is Ownable, IWadingPool {
+    struct UserDeposit {
+        uint amount;
+        uint offsetPoints;
+        uint lockedAmount;
+        bool claimed;
+    }
+
+    mapping(address => UserDeposit) public userDeposits;
+
     IERC20 public pnsh;
     IERC20 public nsh;
-    uint public withdrawDate;
+    uint public accumulatedRewardsPerToken;
+    uint public totalStaked;
+    uint public totalRewarded;
+    uint private constant MAGNIFIER = 1e18;
+
+    event RewardsAdded(uint amount);
+    event ClaimNSH(address indexed user, uint amount);
 
     constructor(address _pNSH) {
         pnsh = IERC20(_pNSH);
@@ -20,13 +36,42 @@ contract WadingPool is Ownable, IWadingPool {
         nsh = IERC20(_nsh);
     }
 
-    function setWithdrawDate(uint launchDate) external onlyOwner {
-        if (withdrawDate <= block.timestamp + 10 days)
-            revert WadingPool__Invalid_WithdrawDate();
-        withdrawDate = launchDate;
+    function addRewards(uint amount) external {
+        totalRewarded += amount;
+        accumulatedRewardsPerToken += (amount * MAGNIFIER) / totalStaked;
+        pnsh.transferFrom(msg.sender, address(this), amount);
+        emit RewardsAdded(amount);
     }
 
-    function addRewards(uint amount) external {
+    function deposit(uint amount) external {
+        UserDeposit storage userDeposit = userDeposits[msg.sender];
+        if (userDeposit.claimed) revert WadingPool__Already_Claimed();
+        _lockTokens(msg.sender);
+        userDeposit.amount += amount;
+        userDeposit.offsetPoints = amount * accumulatedRewardsPerToken;
+        totalStaked += amount;
         pnsh.transferFrom(msg.sender, address(this), amount);
+    }
+
+    function claim() external {
+        if (address(nsh) == address(0)) revert WadingPool__Invalid_NSH();
+        UserDeposit storage userDeposit = userDeposits[msg.sender];
+        if (userDeposit.claimed) revert WadingPool__Already_Claimed();
+        _lockTokens(msg.sender);
+        userDeposit.claimed = true;
+        uint amount = userDeposit.amount + userDeposit.lockedAmount;
+
+        nsh.transfer(msg.sender, amount);
+        emit ClaimNSH(msg.sender, amount);
+    }
+
+    function _lockTokens(address _user) private {
+        UserDeposit storage userDeposit = userDeposits[_user];
+        if (userDeposit.amount == 0) return;
+        uint totalTokens = userDeposit.amount * accumulatedRewardsPerToken;
+        uint tokensToLock = (totalTokens - userDeposit.offsetPoints) /
+            MAGNIFIER;
+        userDeposit.lockedAmount += tokensToLock;
+        userDeposit.offsetPoints = totalTokens;
     }
 }
