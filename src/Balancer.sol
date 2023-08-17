@@ -3,12 +3,12 @@
 pragma solidity 0.8.19;
 
 import "./interface/IBalancer.sol";
-import "./inteface/IExtendedERC20.sol";
+import "./interface/IExtendedERC20.sol";
 import "openzeppelin/access/Ownable.sol";
 
 error NebulaBalancer__NotOracle();
 
-contract NebulaBalancer is IBalancer, Ownable {
+abstract contract NebulaBalancer is IBalancer, Ownable {
     //-----------------------------------------------
     // State Variables
     //-----------------------------------------------
