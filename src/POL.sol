@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+
+import {IPOL, IToken} from "./interface/IPOL.sol";
+
 contract POLv2 is IPOL {
     struct Sells {
         uint256 amountSold;
