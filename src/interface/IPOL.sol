@@ -2,73 +2,57 @@
 
 pragma solidity 0.8.19;
 
-interface IToken {
-    function transfer(address to, uint256 amount) external returns (bool);
+import "openzeppelin/token/ERC20/IERC20.sol";
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) external returns (bool);
-
-    function balanceOf(address _user) external view returns (uint256);
-
-    function totalSupply() external view returns (uint256);
-
-    function approve(address spender, uint256 amount) external returns (bool);
-
-    function burn(uint256 amount) external;
-
-    function burnFrom(address owner, uint256 amount) external;
-
+interface IERC20Mintable is IERC20 {
     function mint(address to, uint256 amount) external;
 }
 
-interface IPOL is IToken {
+interface IPOL is IERC20Mintable {
     function addLiquidity(
-        uint256 min_liquidity,
-        uint256 max_tokens,
-        uint256 base_amount
+        uint256 _minLiquidity,
+        uint256 _maxTokens,
+        uint256 _baseAmount
     ) external returns (uint256);
 
     function removeLiquidity(
-        uint256 amount,
-        uint256 min_base,
-        uint256 min_tokens
+        uint256 _amount,
+        uint256 _minBase,
+        uint256 _minTokens
     ) external returns (uint256, uint256);
 
     function swap(
-        uint256 base_input,
-        uint256 token_input,
-        uint256 base_output,
-        uint256 token_output,
-        uint256 min_intout,
+        uint256 _baseInput,
+        uint256 _tokenInput,
+        uint256 _baseOutput,
+        uint256 _tokenOutput,
+        uint256 _minIntout,
         address _to
     ) external returns (uint256 _output);
 
     function getBaseToLiquidityInputPrice(
-        uint256 base_amount
+        uint256 _baseAmount
     )
         external
         view
-        returns (uint256 liquidity_minted, uint256 token_amount_needed);
+        returns (uint256 liquidityMinted_, uint256 tokenAmountNeeded_);
 
     function outputTokens(
         uint256 _amount,
-        bool isDesired
+        bool _isDesired
     ) external view returns (uint256);
 
     function outputBase(
         uint256 _amount,
-        bool isDesired
+        bool _isDesired
     ) external view returns (uint256);
 
     function addLiquidityFromBase(
-        uint256 _base_amount
+        uint256 _baseAmount
     ) external returns (uint256);
 
     function removeLiquidityToBase(
         uint256 _liquidity,
         uint256 _tax
-    ) external returns (uint256 _base);
+    ) external returns (uint256 base_);
 }
