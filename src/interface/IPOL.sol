@@ -39,11 +39,4 @@ interface IPOL {
         uint256 _amount,
         bool _isDesired
     ) external view returns (uint256);
-
-    function addLiquidityFromTokenB(uint256 _tokenB) external returns (uint256);
-
-    function removeLiquidityToTokenB(
-        uint256 _liquidity,
-        uint256 _tax
-    ) external returns (uint256 base_);
 }

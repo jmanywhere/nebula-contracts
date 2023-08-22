@@ -15,6 +15,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         tokenBSellFee
     }
 
+    //Sell limits only apply to sells on tokenA, not tokenB.
     struct Sells {
         uint256 amountSold;
         uint256 lastSell;
@@ -47,7 +48,6 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
     //           Ecosystem addresses
     // ------------------------------------------------
     address public treasury;
-    address public lock;
 
     // ------------------------------------------------
     //              LIQUIDITY EVENTS
@@ -72,6 +72,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _tokenBOutput,
         uint256 _tokenAOutput
     );
+    event Fee(address indexed _user, uint256 _tokenAFee, uint256 _tokenBFee);
 
     constructor(
         IERC20 _tokenA,
@@ -138,72 +139,6 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
             emit OnAddLiquidity(msg.sender, initLiq, _tokenBAmount, _maxTokenA);
             liqMinted_ = initLiq;
         }
-    }
-
-    function addLiquidityFromTokenB(
-        uint256 _tokenB
-    ) public onlyRole(WHITELIST_ROLE) returns (uint256 _liquidity) {
-        uint256 resTokenB = tokenBReserve();
-        uint256 resTokenA = tokenAReserve();
-
-        tokenB.safeTransferFrom(msg.sender, address(this), _tokenB);
-        // technically we don't need to do anything with the tokens but def, only whitelisted users/contracts can/should do it this way
-        uint256 tokenBSwap = _tokenB / 2;
-        uint256 tokenBRemain = _tokenB - tokenBSwap;
-        uint256 tokens = (tokenBSwap * resTokenA) / (resTokenB + tokenBSwap);
-        // Tax occurs here
-        // We keep the stake burn and treasury tax
-        /*
-        TODO: rewrite fee handling
-        uint256 toBurn = (tokens * buyTaxes[0]) / BASIS;
-        tokenA.burn(toBurn);
-        uint256 toTreasury = (tokenBSwap * buyTaxes[3]) / BASIS;
-        tokenB.approve(fundsDistributor, toTreasury);
-        IDistributor(fundsDistributor).distributeFunds(
-            toTreasury,
-            buyTaxes[4],
-            buyTaxes[5],
-            buyTaxes[6]
-        );
-
-        tokenBSwap -= toTreasury;*/
-        _liquidity = (tokenBRemain * totalSupply()) / (resTokenB + tokenBSwap);
-
-        tokens = (tokenBRemain * resTokenA) / (resTokenB + tokenBSwap);
-
-        _mint(msg.sender, _liquidity);
-        emit OnAddLiquidity(msg.sender, _liquidity, tokenBSwap, tokens);
-    }
-
-    function removeLiquidityToTokenB(
-        uint256 _liquidity,
-        uint256 _tax
-    ) public onlyRole(WHITELIST_ROLE) returns (uint256 _tokenB) {
-        uint256 resTokenB = tokenBReserve();
-        uint256 resTokenA = tokenAReserve();
-        uint256 total = totalSupply();
-        uint256 tokens = (_liquidity * resTokenA) / total;
-        _tokenB = (_liquidity * resTokenB) / total;
-        emit OnRemoveLiquidity(msg.sender, _liquidity, _tokenB, tokens);
-        /*
-        TODO: rewrite fee handling
-        // burn stake tax
-        uint256 tax = (_tax * resTokenA) / total;
-        tokenA.burn(tax);
-        // Distribute Treasury sell tax This is only half of the tax percent
-        tax = (_tokenB * _tax) / _liquidity;
-        tokenB.approve(fundsDistributor, tax);
-        IDistributor(fundsDistributor).distributeFunds(
-            tax,
-            sellTaxes[4],
-            sellTaxes[5],
-            sellTaxes[6]
-        );*/
-        //both tokenB and tax are x2 since the tax in BUSD is only half of the total tax
-        _tokenB = (_tokenB - _tax) * 2;
-        // Burn _liquidity from msg.sender;
-        burn(_liquidity);
-        tokenB.safeTransfer(msg.sender, _tokenB);
     }
 
     /**
@@ -305,55 +240,32 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         address _buyer,
         uint256 _resTokenB,
         uint256 _resTokenA
-    ) private returns (uint256 out) {
-        // Transfer BUSD here for usage
+    ) private returns (uint256 tokenA_) {
         tokenB.safeTransferFrom(_buyer, address(this), _tokenB);
-        out = getInputPrice(_tokenB, _resTokenB, _resTokenA);
         if (hasRole(WHITELIST_ROLE, _buyer)) {
-            require(out >= _min, "BT1"); // dev: tokenB definitely not enough
-            // Transfer final _amount to recipient
-            tokenA.safeTransfer(_to, out);
-            emit Swap(msg.sender, _tokenB, 0, 0, out);
-            return out;
+            tokenA_ = getInputPrice(_tokenB, _resTokenB, _resTokenA);
+        } else {
+            uint256 toTreasuryTokenB = (_tokenB *
+                feeRatesBasis[uint256(FEES.tokenBSellFee)]) / BASIS;
+            tokenA_ = getInputPrice(
+                _tokenB - toTreasuryTokenB,
+                _resTokenB,
+                _resTokenA
+            );
+            uint256 toTreasuryTokenA = (tokenA_ *
+                feeRatesBasis[uint256(FEES.tokenABuyFee)]) / BASIS;
+            tokenA_ -= toTreasuryTokenA;
+            if (toTreasuryTokenA > 0) {
+                tokenA.safeTransfer(treasury, toTreasuryTokenA);
+            }
+            if (toTreasuryTokenB > 0) {
+                tokenB.safeTransfer(treasury, toTreasuryTokenB);
+            }
+            emit Fee(_buyer, toTreasuryTokenA, toTreasuryTokenB);
         }
-        /*
-        TODO: rewrite fee handling
-        uint256 tax_1 = (_tokenB * buyTaxes[2]) / BASIS / 2;
-        (uint256 tax_2, uint256 tax_3) = getLiquidityInputPrice(
-            tax_1,
-            _resTokenB,
-            _resTokenA,
-            totalSupply()
-        );
-        //    Mint Liquidity
-        emit OnAddLiquidity(lock, tax_2, tax_1, tax_3);
-        _mint(lock, tax_2);
-        // Foundation Tax
-        tax_2 = (_tokenB * buyTaxes[1]) / BASIS;
-        tax_1 += tax_2;
-        tokenB.approve(foundation, tax_2);
-        IFoundation(foundation).distribute(tax_2);
-        // Treasury Distribution
-        tax_2 = (_tokenB * buyTaxes[3]) / BASIS;
-        tax_1 += tax_2;
-        tokenB.approve(fundsDistributor, tax_2);
-        IDistributor(fundsDistributor).distributeFunds(
-            tax_2,
-            buyTaxes[4],
-            buyTaxes[5],
-            buyTaxes[6]
-        );
-        // BURN tokenA
-        tax_2 = (out * buyTaxes[0]) / BASIS;
-        tokenA.burn(tax_2);
-
-        // TAX_1 is the proportional _amount used in TOKENS
-        tax_1 = (out * (buyTaxes[1] + buyTaxes[2] + buyTaxes[3])) / BASIS;
-        //  Remove TAXES from OUTPUT
-        out -= tax_1 + tax_2;*/
-        require(out >= _min, "BT1_"); // dev: minimum
-        tokenA.safeTransfer(_to, out);
-        emit Swap(msg.sender, _tokenB, 0, 0, out);
+        tokenA.safeTransfer(_to, tokenA_);
+        emit Swap(msg.sender, _tokenB, 0, 0, tokenA_);
+        require(tokenA_ >= _min, "BT1"); // dev: minimum
     }
 
     function _tokenAToTokenB(
@@ -361,72 +273,56 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _min,
         address _to,
         address _buyer,
-        uint256 resTokenB,
-        uint256 resTokenA
-    ) private returns (uint256 out) {
+        uint256 _resTokenB,
+        uint256 _resTokenA
+    ) private returns (uint256 tokenB_) {
         // Transfer in tokenA
         tokenA.safeTransferFrom(_buyer, address(this), _tokenA);
-        out = getInputPrice(_tokenA, resTokenA, resTokenB);
         if (hasRole(WHITELIST_ROLE, _buyer)) {
-            require(out >= _min, "TB1"); // dev: tokenB definitely not enough
-            // Transfer final _amount to recipient
-            tokenB.safeTransfer(_to, out);
-            emit Swap(_buyer, 0, _tokenA, out, 0);
-            return out;
-        }
-        if (!hasRole(NOSELLLIMIT_ROLE, _buyer)) {
-            bool prev24hours = block.timestamp - sellTracker[_buyer].lastSell <
-                24 hours;
+            tokenB_ = getInputPrice(_tokenA, _resTokenA, _resTokenB);
+        } else {
+            //Check sell limit
+            if (!hasRole(NOSELLLIMIT_ROLE, _buyer)) {
+                bool prev24hours = block.timestamp -
+                    sellTracker[_buyer].lastSell <
+                    24 hours;
 
-            if (prev24hours) {
-                require(
-                    sellTracker[_buyer].amountSold + _tokenA <= maxDailySell,
-                    "MXSELL"
-                );
-                sellTracker[_buyer].amountSold += _tokenA;
-            } else {
-                require(_tokenA <= maxDailySell, "MXSELL2");
-                sellTracker[_buyer].lastSell = block.timestamp;
-                sellTracker[_buyer].amountSold = _tokenA;
+                if (prev24hours) {
+                    require(
+                        sellTracker[_buyer].amountSold + _tokenA <=
+                            maxDailySell,
+                        "TB1"
+                    );
+                    sellTracker[_buyer].amountSold += _tokenA;
+                } else {
+                    require(_tokenA <= maxDailySell, "TB2");
+                    sellTracker[_buyer].lastSell = block.timestamp;
+                    sellTracker[_buyer].amountSold = _tokenA;
+                }
             }
+            //taxes
+            uint256 toTreasuryTokenA = (_tokenA *
+                feeRatesBasis[uint256(FEES.tokenASellFee)]) / BASIS;
+            tokenB_ = getInputPrice(
+                _tokenA - toTreasuryTokenA,
+                _resTokenA,
+                _resTokenB
+            );
+            uint256 toTreasuryTokenB = (tokenB_ *
+                feeRatesBasis[uint256(FEES.tokenBBuyFee)]) / BASIS;
+            tokenB_ -= toTreasuryTokenA;
+            if (toTreasuryTokenA > 0) {
+                tokenA.safeTransfer(treasury, toTreasuryTokenA);
+            }
+            if (toTreasuryTokenB > 0) {
+                tokenB.safeTransfer(treasury, toTreasuryTokenB);
+            }
+            emit Fee(_buyer, toTreasuryTokenA, toTreasuryTokenB);
         }
-        /*
-        TODO: rewrite fee handling
-        // BURN 5%
-        uint256 tax_1 = (_tokenA * sellTaxes[0]) / BASIS;
-        tokenA.burn(tax_1);
-        // Amount of tokenA used for Liquidity
-        tax_1 = (_tokenA * sellTaxes[2]) / BASIS / 2;
 
-        (uint256 tax_2, uint256 tax_3) = getLiquidityInputPrice(
-            tax_1,
-            resTokenA,
-            resTokenB,
-            totalSupply()
-        );
-        emit OnAddLiquidity(lock, tax_2, tax_1, tax_3);
-        _mint(lock, tax_2);
-        // foundation
-        tax_1 = (out * sellTaxes[1]) / BASIS;
-        tokenB.approve(foundation, tax_1);
-        IFoundation(foundation).distribute(tax_1);
-        // funds Distributor
-        tax_2 = (out * sellTaxes[3]) / BASIS;
-        tokenB.approve(fundsDistributor, tax_2);
-        IDistributor(fundsDistributor).distributeFunds(
-            tax_2,
-            sellTaxes[4],
-            sellTaxes[5],
-            sellTaxes[6]
-        );
-
-        tax_1 += tax_2;
-        tax_2 = (out * (sellTaxes[0] + sellTaxes[2])) / BASIS;
-        out -= tax_1 + tax_2;*/
-
-        require(out >= _min, "TB2"); // dev: less than minimum
-        tokenB.safeTransfer(_to, out);
-        emit Swap(_buyer, 0, _tokenA, out, 0);
+        require(tokenB_ >= _min, "TB3"); // dev: less than minimum
+        tokenB.safeTransfer(_to, tokenB_);
+        emit Swap(_buyer, 0, _tokenA, tokenB_, 0);
     }
 
     function tokenAReserve() public view returns (uint256) {
@@ -557,13 +453,6 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
     ) public pure returns (uint256 liquidityGen_, uint256 tokensNeeded_) {
         liquidityGen_ = (input * currentLiqSupply) / inputReserve;
         tokensNeeded_ = ((input * otherReserve) / inputReserve) + 1;
-    }
-
-    function setLiquidityLock(
-        address _newLock
-    ) external onlyRole(MANAGER_ROLE) {
-        require(_newLock != address(0), "FDTX"); // dev: Invalid Foundation contract
-        lock = _newLock;
     }
 
     function setTaxes(
