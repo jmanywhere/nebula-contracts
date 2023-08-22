@@ -3,9 +3,11 @@ pragma solidity 0.8.19;
 
 import "openzeppelin/access/AccessControlEnumerable.sol";
 import "openzeppelin/token/ERC20/extensions/ERC20Burnable.sol";
+import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import "./interface/IPOL.sol";
 
 contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
+    using SafeERC20 for IERC20;
     enum FEES {
         tokenABuyFee,
         tokenBBuyFee,
@@ -26,11 +28,11 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
     //           Taxes & Limits
     // ------------------------------------------------
 
+    // Taxes are divided BASIS
+    // Indices are from enum FEES
     uint256 public constant BASIS = 10000;
-    // These taxes are divided BASIS
-    // Indexes are from enum FEES
     uint16[4] public feeRatesBasis;
-    uint256 public maxFee = 3500;
+    uint256 public constant MAX_FEE = 3500;
     // MAX daily sells
     uint256 public maxDailySell = 500 ether;
 
@@ -93,39 +95,33 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
      * @notice Deposit BNB && Tokens (STAKE) at current ratio to mint STOKE tokens.
      * @dev _minLiquidity does nothing when total SWAP supply is 0.
      * @param _minLiquidity Minimum number of STOKE sender will mint if total STAKE supply is greater than 0.
-     * @param _maxTokens Maximum number of tokens deposited. Deposits max _amount if total STOKE supply is 0.
-     * @return The _amount of SWAP minted.
+     * @param _maxTokenA Maximum number of tokens deposited. Deposits max _amount if total STOKE supply is 0.
+     * @param _tokenBAmount Amount of tokenB to add as liquidity.
+     * @return liqMinted_ The _amount of SWAP minted.
      */
     function addLiquidity(
         uint256 _minLiquidity,
-        uint256 _maxTokens,
+        uint256 _maxTokenA,
         uint256 _tokenBAmount
-    ) public returns (uint256) {
-        require(_maxTokens > 0 && _tokenBAmount > 0, "ALIQ1"); //dev: Invalid Arguments
-        require(
-            tokenB.transferFrom(msg.sender, address(this), _tokenBAmount),
-            "ALIQ2"
-        ); // dev: Can't transfer tokens
-        require(_minLiquidity > 0, "ALIQ3"); //dev: Minimum liquidity to add must be greater than zero
+    ) public returns (uint256 liqMinted_) {
+        require(_maxTokenA > 0 && _tokenBAmount > 0, "ALIQ1"); //dev: Invalid Arguments
+        require(_minLiquidity > 0, "ALIQ2"); //dev: Minimum liquidity to add must be greater than zero
 
-        uint256 tokenAAmount;
+        uint256 resTokenB = tokenBReserve();
+        uint256 resTokenA = tokenAReserve();
+
+        tokenB.safeTransferFrom(msg.sender, address(this), _tokenBAmount);
+
         uint256 totalLiq = totalSupply();
         if (totalLiq > 0) {
-            uint256 tokenBReserveNew = tokenB.balanceOf(address(this)) -
-                _tokenBAmount;
-            uint256 tokenAReserveNew = tokenA.balanceOf(address(this));
-            tokenAAmount =
-                ((_tokenBAmount * tokenAReserveNew) / tokenBReserveNew) +
+            uint256 tokenAAmount = ((_tokenBAmount * resTokenA) / resTokenB) +
                 1;
-            uint256 liqToMint = (_tokenBAmount * totalLiq) / tokenBReserveNew;
+            uint256 liqToMint = (_tokenBAmount * totalLiq) / resTokenB;
             require(
-                _maxTokens >= tokenAAmount && liqToMint >= _minLiquidity,
+                _maxTokenA >= tokenAAmount && liqToMint >= _minLiquidity,
                 "ALIQ4"
             ); //dev: Token amounts mismatch
-            require(
-                tokenA.transferFrom(msg.sender, address(this), tokenAAmount),
-                "ALIQ5"
-            ); // dev: transfer of tokenA unsuccessful
+            tokenA.safeTransferFrom(msg.sender, address(this), tokenAAmount);
             _mint(msg.sender, liqToMint);
             emit OnAddLiquidity(
                 msg.sender,
@@ -133,19 +129,15 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
                 _tokenBAmount,
                 tokenAAmount
             );
-            return liqToMint;
+            liqMinted_ = liqToMint;
+        } else {
+            require(_tokenBAmount >= 1 ether, "ALIQ6"); // dev: invalid initial _amount of liquidity created
+            uint256 initLiq = tokenB.balanceOf(address(this));
+            _mint(msg.sender, initLiq);
+            tokenA.safeTransferFrom(msg.sender, address(this), _maxTokenA);
+            emit OnAddLiquidity(msg.sender, initLiq, _tokenBAmount, _maxTokenA);
+            liqMinted_ = initLiq;
         }
-
-        require(_tokenBAmount >= 1 ether, "ALIQ6"); // dev: invalid initial _amount of liquidity created
-        tokenAAmount = _maxTokens;
-        uint256 initLiq = tokenB.balanceOf(address(this));
-        _mint(msg.sender, initLiq);
-        require(
-            tokenA.transferFrom(msg.sender, address(this), tokenAAmount),
-            "ALIQ7"
-        ); // dev: unsuccessful transfer from on init liquidity
-        emit OnAddLiquidity(msg.sender, initLiq, _tokenBAmount, tokenAAmount);
-        return initLiq;
     }
 
     function addLiquidityFromTokenB(
@@ -154,7 +146,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 resTokenB = tokenBReserve();
         uint256 resTokenA = tokenAReserve();
 
-        tokenB.transferFrom(msg.sender, address(this), _tokenB);
+        tokenB.safeTransferFrom(msg.sender, address(this), _tokenB);
         // technically we don't need to do anything with the tokens but def, only whitelisted users/contracts can/should do it this way
         uint256 tokenBSwap = _tokenB / 2;
         uint256 tokenBRemain = _tokenB - tokenBSwap;
@@ -211,7 +203,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         _tokenB = (_tokenB - _tax) * 2;
         // Burn _liquidity from msg.sender;
         burn(_liquidity);
-        tokenB.transfer(msg.sender, _tokenB);
+        tokenB.safeTransfer(msg.sender, _tokenB);
     }
 
     /**
@@ -237,8 +229,8 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
             "RLIQ1"
         ); // Not enough tokens to receive
         _burn(msg.sender, _amount);
-        require(tokenB.transfer(msg.sender, _tokenBAmount), "RLIQ2"); // dev: Error transfering tokenB tokens
-        require(tokenA.transfer(msg.sender, tokenAAmount), "RLIQ3"); //dev: Error transferring other tokens
+        tokenB.safeTransfer(msg.sender, _tokenBAmount);
+        tokenA.safeTransfer(msg.sender, tokenAAmount);
         emit OnRemoveLiquidity(
             msg.sender,
             _amount,
@@ -315,12 +307,12 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _resTokenA
     ) private returns (uint256 out) {
         // Transfer BUSD here for usage
-        tokenB.transferFrom(_buyer, address(this), _tokenB);
+        tokenB.safeTransferFrom(_buyer, address(this), _tokenB);
         out = getInputPrice(_tokenB, _resTokenB, _resTokenA);
         if (hasRole(WHITELIST_ROLE, _buyer)) {
             require(out >= _min, "BT1"); // dev: tokenB definitely not enough
             // Transfer final _amount to recipient
-            tokenA.transfer(_to, out);
+            tokenA.safeTransfer(_to, out);
             emit Swap(msg.sender, _tokenB, 0, 0, out);
             return out;
         }
@@ -360,7 +352,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         //  Remove TAXES from OUTPUT
         out -= tax_1 + tax_2;*/
         require(out >= _min, "BT1_"); // dev: minimum
-        tokenA.transfer(_to, out);
+        tokenA.safeTransfer(_to, out);
         emit Swap(msg.sender, _tokenB, 0, 0, out);
     }
 
@@ -373,12 +365,12 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 resTokenA
     ) private returns (uint256 out) {
         // Transfer in tokenA
-        tokenA.transferFrom(_buyer, address(this), _tokenA);
+        tokenA.safeTransferFrom(_buyer, address(this), _tokenA);
         out = getInputPrice(_tokenA, resTokenA, resTokenB);
         if (hasRole(WHITELIST_ROLE, _buyer)) {
             require(out >= _min, "TB1"); // dev: tokenB definitely not enough
             // Transfer final _amount to recipient
-            tokenB.transfer(_to, out);
+            tokenB.safeTransfer(_to, out);
             emit Swap(_buyer, 0, _tokenA, out, 0);
             return out;
         }
@@ -433,7 +425,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         out -= tax_1 + tax_2;*/
 
         require(out >= _min, "TB2"); // dev: less than minimum
-        tokenB.transfer(_to, out);
+        tokenB.safeTransfer(_to, out);
         emit Swap(_buyer, 0, _tokenA, out, 0);
     }
 
@@ -581,7 +573,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint16 _tokenBSellFeeBasis
     ) external onlyRole(MANAGER_ROLE) {
         require(
-            maxFee <
+            MAX_FEE <
                 _tokenABuyFeeBasis +
                     _tokenBBuyFeeBasis +
                     _tokenASellFeeBasis +
