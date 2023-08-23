@@ -5,9 +5,11 @@ import "openzeppelin/access/AccessControlEnumerable.sol";
 import "openzeppelin/token/ERC20/extensions/ERC20Burnable.sol";
 import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
 import "./interface/IPOL.sol";
+import "./libraries/UQ112x112.sol";
 
 contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
     using SafeERC20 for IERC20;
+    using UQ112x112 for uint224;
     enum FEES {
         tokenABuyFee,
         tokenBBuyFee,
@@ -24,6 +26,13 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
 
     IERC20 public immutable tokenA;
     IERC20 public immutable tokenB;
+
+    // ------------------------------------------------
+    //           For price oracles
+    // ------------------------------------------------
+    uint256 public priceACumulativeLast;
+    uint256 public priceBCumulativeLast;
+    uint32 public blockTimestampLast;
 
     // ------------------------------------------------
     //           Taxes & Limits
@@ -136,6 +145,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
             uint256 initLiq = tokenB.balanceOf(address(this));
             _mint(msg.sender, initLiq);
             tokenA.safeTransferFrom(msg.sender, address(this), _maxTokenA);
+            _updatePriceAccumulators();
             emit OnAddLiquidity(msg.sender, initLiq, _tokenBAmount, _maxTokenA);
             liqMinted_ = initLiq;
         }
@@ -166,6 +176,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         _burn(msg.sender, _amount);
         tokenB.safeTransfer(msg.sender, _tokenBAmount);
         tokenA.safeTransfer(msg.sender, tokenAAmount);
+        _updatePriceAccumulators();
         emit OnRemoveLiquidity(
             msg.sender,
             _amount,
@@ -264,6 +275,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
             emit Fee(_buyer, toTreasuryTokenA, toTreasuryTokenB);
         }
         tokenA.safeTransfer(_to, tokenA_);
+        _updatePriceAccumulators();
         emit Swap(msg.sender, _tokenB, 0, 0, tokenA_);
         require(tokenA_ >= _min, "BT1"); // dev: minimum
     }
@@ -322,7 +334,32 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
 
         require(tokenB_ >= _min, "TB3"); // dev: less than minimum
         tokenB.safeTransfer(_to, tokenB_);
+        _updatePriceAccumulators();
         emit Swap(_buyer, 0, _tokenA, tokenB_, 0);
+    }
+
+    function _updatePriceAccumulators() internal {
+        uint32 blockTimestamp = uint32(block.timestamp % 2 ** 32);
+        uint32 timeElapsed;
+        unchecked {
+            // overflow is desired
+            timeElapsed = blockTimestamp - blockTimestampLast;
+        }
+        uint112 tokenARes = uint112(tokenAReserve());
+        uint112 tokenBRes = uint112(tokenBReserve());
+
+        if (timeElapsed == 0 || tokenARes == 0 || tokenBRes == 0) return;
+
+        unchecked {
+            // * never overflows, and + overflow is desired
+            priceACumulativeLast +=
+                uint(UQ112x112.encode(tokenBRes).uqdiv(tokenARes)) *
+                timeElapsed;
+            priceBCumulativeLast +=
+                uint(UQ112x112.encode(tokenARes).uqdiv(tokenBRes)) *
+                timeElapsed;
+        }
+        blockTimestampLast = blockTimestamp;
     }
 
     function tokenAReserve() public view returns (uint256) {
