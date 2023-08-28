@@ -4,12 +4,20 @@ pragma solidity 0.8.19;
 import "openzeppelin/access/AccessControlEnumerable.sol";
 import "openzeppelin/token/ERC20/extensions/ERC20Burnable.sol";
 import "openzeppelin/token/ERC20/utils/SafeERC20.sol";
+import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import "./interface/IPOL.sol";
 import "./libraries/UQ112x112.sol";
 
 contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
-    using SafeERC20 for IERC20;
+    using SafeERC20 for IERC20Metadata;
     using UQ112x112 for uint224;
+
+    error InvalidArguments();
+    error InvalidInitialLiquidity();
+    error ExceedMaxDailySell();
+    error BelowMinimum(uint256 min, uint256 val);
+    error AboveMaximum(uint256 max, uint256 val);
+
     enum FEES {
         tokenABuyFee,
         tokenBBuyFee,
@@ -24,8 +32,8 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
     }
     mapping(address => Sells) public sellTracker;
 
-    IERC20 public immutable tokenA;
-    IERC20 public immutable tokenB;
+    IERC20Metadata public immutable tokenA;
+    IERC20Metadata public immutable tokenB;
 
     // ------------------------------------------------
     //           For price oracles
@@ -84,8 +92,8 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
     event Fee(address indexed _user, uint256 _tokenAFee, uint256 _tokenBFee);
 
     constructor(
-        IERC20 _tokenA,
-        IERC20 _tokenB,
+        IERC20Metadata _tokenA,
+        IERC20Metadata _tokenB,
         string memory _name,
         string memory _symbol
     ) ERC20(_name, _symbol) {
@@ -114,8 +122,8 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _maxTokenA,
         uint256 _tokenBAmount
     ) public returns (uint256 liqMinted_) {
-        require(_maxTokenA > 0 && _tokenBAmount > 0, "ALIQ1"); //dev: Invalid Arguments
-        require(_minLiquidity > 0, "ALIQ2"); //dev: Minimum liquidity to add must be greater than zero
+        if (_maxTokenA == 0 || _tokenBAmount == 0 || _minLiquidity > 0)
+            revert InvalidArguments();
 
         uint256 resTokenB = tokenBReserve();
         uint256 resTokenA = tokenAReserve();
@@ -127,10 +135,10 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
             uint256 tokenAAmount = ((_tokenBAmount * resTokenA) / resTokenB) +
                 1;
             uint256 liqToMint = (_tokenBAmount * totalLiq) / resTokenB;
-            require(
-                _maxTokenA >= tokenAAmount && liqToMint >= _minLiquidity,
-                "ALIQ4"
-            ); //dev: Token amounts mismatch
+            if (_maxTokenA < tokenAAmount)
+                revert AboveMaximum(_maxTokenA, tokenAAmount);
+            if (liqToMint < _minLiquidity)
+                revert BelowMinimum(_minLiquidity, liqToMint);
             tokenA.safeTransferFrom(msg.sender, address(this), tokenAAmount);
             _mint(msg.sender, liqToMint);
             emit OnAddLiquidity(
@@ -141,7 +149,8 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
             );
             liqMinted_ = liqToMint;
         } else {
-            require(_tokenBAmount >= 1 ether, "ALIQ6"); // dev: invalid initial _amount of liquidity created
+            if (_tokenBAmount < 10 ** tokenB.decimals())
+                revert InvalidInitialLiquidity();
             uint256 initLiq = tokenB.balanceOf(address(this));
             _mint(msg.sender, initLiq);
             tokenA.safeTransferFrom(msg.sender, address(this), _maxTokenA);
@@ -163,27 +172,22 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _minTokenB,
         uint256 _minTokenA
     ) public returns (uint256, uint256) {
-        require(_amount > 0 && _minTokenB > 0 && _minTokenA > 0);
+        if (_amount == 0 || _minTokenB == 0 || _minTokenA > 0)
+            revert InvalidArguments();
         uint256 totalLiquidity = totalSupply();
-        require(totalLiquidity > 0);
-        uint256 _tokenBAmount = (_amount * tokenB.balanceOf(address(this))) /
+        uint256 tokenBAmount = (_amount * tokenB.balanceOf(address(this))) /
             totalLiquidity;
         uint256 tokenAAmount = (_amount * (tokenAReserve())) / totalLiquidity;
-        require(
-            _tokenBAmount >= _minTokenB && tokenAAmount >= _minTokenA,
-            "RLIQ1"
-        ); // Not enough tokens to receive
+        if (tokenBAmount < _minTokenB)
+            revert BelowMinimum(tokenBAmount, _minTokenB);
+        if (tokenAAmount < _minTokenA)
+            revert BelowMinimum(tokenAAmount, _minTokenA);
         _burn(msg.sender, _amount);
-        tokenB.safeTransfer(msg.sender, _tokenBAmount);
+        tokenB.safeTransfer(msg.sender, tokenBAmount);
         tokenA.safeTransfer(msg.sender, tokenAAmount);
         _updatePriceAccumulators();
-        emit OnRemoveLiquidity(
-            msg.sender,
-            _amount,
-            _tokenBAmount,
-            tokenAAmount
-        );
-        return (_tokenBAmount, tokenAAmount);
+        emit OnRemoveLiquidity(msg.sender, _amount, tokenBAmount, tokenAAmount);
+        return (tokenBAmount, tokenAAmount);
     }
 
     ///@notice swap from one token to the other, please make sure only one value is inputted, as the rest will be ignored
@@ -223,7 +227,6 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
                 tokenBRes,
                 tokenRes
             );
-            // TODO CHECK THE NEXT 2
         else if (_tokenAInput > 0)
             _output = _tokenAToTokenB(
                 _tokenAInput,
@@ -277,7 +280,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         tokenA.safeTransfer(_to, tokenA_);
         _updatePriceAccumulators();
         emit Swap(msg.sender, _tokenB, 0, 0, tokenA_);
-        require(tokenA_ >= _min, "BT1"); // dev: minimum
+        if (tokenA_ < _min) revert BelowMinimum(_min, tokenA_);
     }
 
     function _tokenAToTokenB(
@@ -300,14 +303,11 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
                     24 hours;
 
                 if (prev24hours) {
-                    require(
-                        sellTracker[_buyer].amountSold + _tokenA <=
-                            maxDailySell,
-                        "TB1"
-                    );
+                    if (sellTracker[_buyer].amountSold + _tokenA > maxDailySell)
+                        revert ExceedMaxDailySell();
                     sellTracker[_buyer].amountSold += _tokenA;
                 } else {
-                    require(_tokenA <= maxDailySell, "TB2");
+                    if (_tokenA > maxDailySell) revert ExceedMaxDailySell();
                     sellTracker[_buyer].lastSell = block.timestamp;
                     sellTracker[_buyer].amountSold = _tokenA;
                 }
@@ -332,7 +332,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
             emit Fee(_buyer, toTreasuryTokenA, toTreasuryTokenB);
         }
 
-        require(tokenB_ >= _min, "TB3"); // dev: less than minimum
+        if (tokenB_ < _min) revert BelowMinimum(_min, tokenB_);
         tokenB.safeTransfer(_to, tokenB_);
         _updatePriceAccumulators();
         emit Swap(_buyer, 0, _tokenA, tokenB_, 0);
@@ -382,7 +382,8 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _inputReserve,
         uint256 _outputReserve
     ) public pure returns (uint256) {
-        require(_inputReserve > 0 && _outputReserve > 0, "INVALID_VALUE");
+        if (_inputReserve == 0 && _outputReserve == 0)
+            revert InvalidArguments();
         uint256 numerator = _inputAmount * _outputReserve;
         uint256 denominator = _inputReserve + _inputAmount;
         return numerator / denominator;
@@ -400,7 +401,8 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _inputReserve,
         uint256 _outputReserve
     ) public pure returns (uint256) {
-        require(_inputReserve > 0 && _outputReserve > 0);
+        if (_inputReserve == 0 || _outputReserve == 0)
+            revert InvalidArguments();
         uint256 numerator = _inputReserve * _outputAmount;
         uint256 denominator = (_outputReserve - _outputAmount);
         return (numerator / denominator) + 1;
@@ -498,14 +500,11 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint16 _tokenASellFeeBasis,
         uint16 _tokenBSellFeeBasis
     ) external onlyRole(MANAGER_ROLE) {
-        require(
-            MAX_FEE <
-                _tokenABuyFeeBasis +
-                    _tokenBBuyFeeBasis +
-                    _tokenASellFeeBasis +
-                    _tokenBSellFeeBasis,
-            "TX1"
-        ); // dev: Max taxes reached
+        uint16 newTotalFees = _tokenABuyFeeBasis +
+            _tokenBBuyFeeBasis +
+            _tokenASellFeeBasis +
+            _tokenBSellFeeBasis;
+        if (MAX_FEE < newTotalFees) revert AboveMaximum(MAX_FEE, newTotalFees);
         feeRatesBasis[uint256(FEES.tokenABuyFee)] = _tokenABuyFeeBasis;
         feeRatesBasis[uint256(FEES.tokenBBuyFee)] = _tokenBBuyFeeBasis;
         feeRatesBasis[uint256(FEES.tokenASellFee)] = _tokenASellFeeBasis;
