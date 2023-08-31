@@ -8,15 +8,15 @@ import "openzeppelin/token/ERC20/extensions/IERC20Metadata.sol";
 import "./interface/IPOL.sol";
 import "./libraries/UQ112x112.sol";
 
+error InvalidArguments();
+error InvalidInitialLiquidity();
+error ExceedMaxDailySell();
+error BelowMinimum(uint256 min, uint256 val);
+error AboveMaximum(uint256 max, uint256 val);
+
 contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
     using SafeERC20 for IERC20Metadata;
     using UQ112x112 for uint224;
-
-    error InvalidArguments();
-    error InvalidInitialLiquidity();
-    error ExceedMaxDailySell();
-    error BelowMinimum(uint256 min, uint256 val);
-    error AboveMaximum(uint256 max, uint256 val);
 
     enum FEES {
         tokenABuyFee,
@@ -122,42 +122,44 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _maxTokenA,
         uint256 _tokenBAmount
     ) public returns (uint256 liqMinted_) {
-        if (_maxTokenA == 0 || _tokenBAmount == 0 || _minLiquidity > 0)
+        if (_maxTokenA == 0 || _tokenBAmount == 0 || _minLiquidity == 0)
             revert InvalidArguments();
 
-        uint256 resTokenB = tokenBReserve();
-        uint256 resTokenA = tokenAReserve();
-
-        tokenB.safeTransferFrom(msg.sender, address(this), _tokenBAmount);
-
         uint256 totalLiq = totalSupply();
+
+        //Calculate tokenA amount and liquidity to mint.
+        uint256 tokenAAmount;
         if (totalLiq > 0) {
-            uint256 tokenAAmount = ((_tokenBAmount * resTokenA) / resTokenB) +
-                1;
-            uint256 liqToMint = (_tokenBAmount * totalLiq) / resTokenB;
+            (liqMinted_, tokenAAmount) = getTokenBToLiquidityInputPrice(
+                _tokenBAmount
+            );
             if (_maxTokenA < tokenAAmount)
                 revert AboveMaximum(_maxTokenA, tokenAAmount);
-            if (liqToMint < _minLiquidity)
-                revert BelowMinimum(_minLiquidity, liqToMint);
-            tokenA.safeTransferFrom(msg.sender, address(this), tokenAAmount);
-            _mint(msg.sender, liqToMint);
-            emit OnAddLiquidity(
-                msg.sender,
-                liqToMint,
-                _tokenBAmount,
-                tokenAAmount
-            );
-            liqMinted_ = liqToMint;
+            if (liqMinted_ < _minLiquidity)
+                revert BelowMinimum(_minLiquidity, liqMinted_);
         } else {
-            if (_tokenBAmount < 10 ** tokenB.decimals())
-                revert InvalidInitialLiquidity();
-            uint256 initLiq = tokenB.balanceOf(address(this));
-            _mint(msg.sender, initLiq);
-            tokenA.safeTransferFrom(msg.sender, address(this), _maxTokenA);
-            _updatePriceAccumulators();
-            emit OnAddLiquidity(msg.sender, initLiq, _tokenBAmount, _maxTokenA);
-            liqMinted_ = initLiq;
+            if (
+                _tokenBAmount < 10 ** (tokenB.decimals() / 4) ||
+                _maxTokenA < 10 ** (tokenA.decimals() / 4) ||
+                _maxTokenA / _tokenBAmount > 2 ** 64 ||
+                _tokenBAmount / _maxTokenA > 2 ** 64
+            ) revert InvalidInitialLiquidity();
+
+            liqMinted_ = _tokenBAmount;
+            tokenAAmount = _maxTokenA;
         }
+
+        tokenA.safeTransferFrom(msg.sender, address(this), tokenAAmount);
+        tokenB.safeTransferFrom(msg.sender, address(this), _tokenBAmount);
+
+        _mint(msg.sender, liqMinted_);
+        _updatePriceAccumulators();
+        emit OnAddLiquidity(
+            msg.sender,
+            liqMinted_,
+            _tokenBAmount,
+            tokenAAmount
+        );
     }
 
     /**
@@ -172,12 +174,11 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _minTokenB,
         uint256 _minTokenA
     ) public returns (uint256, uint256) {
-        if (_amount == 0 || _minTokenB == 0 || _minTokenA > 0)
+        if (_amount == 0 || _minTokenB == 0 || _minTokenA == 0)
             revert InvalidArguments();
         uint256 totalLiquidity = totalSupply();
-        uint256 tokenBAmount = (_amount * tokenB.balanceOf(address(this))) /
-            totalLiquidity;
-        uint256 tokenAAmount = (_amount * (tokenAReserve())) / totalLiquidity;
+        uint256 tokenBAmount = (_amount * tokenBReserve()) / totalLiquidity;
+        uint256 tokenAAmount = (_amount * tokenAReserve()) / totalLiquidity;
         if (tokenBAmount < _minTokenB)
             revert BelowMinimum(tokenBAmount, _minTokenB);
         if (tokenAAmount < _minTokenA)
@@ -206,44 +207,34 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _minIntout,
         address _to
     ) public returns (uint256 _output) {
-        uint256 tokenRes = tokenAReserve();
-        uint256 tokenBRes = tokenBReserve();
         // BUYER IS ALWAYS MSG.SENDER
         if (_tokenBInput > 0)
             _output = _tokenBToTokenA(
                 _tokenBInput,
                 _minIntout,
                 _to,
-                msg.sender,
-                tokenBRes,
-                tokenRes
+                msg.sender
             );
         else if (_tokenAOutput > 0)
             _output = _tokenBToTokenA(
                 _minIntout,
                 _tokenAOutput,
                 _to,
-                msg.sender,
-                tokenBRes,
-                tokenRes
+                msg.sender
             );
         else if (_tokenAInput > 0)
             _output = _tokenAToTokenB(
                 _tokenAInput,
                 _minIntout,
                 _to,
-                msg.sender,
-                tokenBRes,
-                tokenRes
+                msg.sender
             );
         else if (_tokenBOutput > 0)
             _output = _tokenAToTokenB(
                 _minIntout,
                 _tokenBOutput,
                 _to,
-                msg.sender,
-                tokenBRes,
-                tokenRes
+                msg.sender
             );
     }
 
@@ -251,33 +242,23 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _tokenB,
         uint256 _min,
         address _to,
-        address _buyer,
-        uint256 _resTokenB,
-        uint256 _resTokenA
+        address _buyer
     ) private returns (uint256 tokenA_) {
+        (uint256 output, uint256 feeA, uint256 feeB) = outputTokenA(
+            _tokenB,
+            false,
+            !hasRole(WHITELIST_ROLE, _buyer)
+        );
+        tokenA_ = output;
         tokenB.safeTransferFrom(_buyer, address(this), _tokenB);
-        if (hasRole(WHITELIST_ROLE, _buyer)) {
-            tokenA_ = getInputPrice(_tokenB, _resTokenB, _resTokenA);
-        } else {
-            uint256 toTreasuryTokenB = (_tokenB *
-                feeRatesBasis[uint256(FEES.tokenBSellFee)]) / BASIS;
-            tokenA_ = getInputPrice(
-                _tokenB - toTreasuryTokenB,
-                _resTokenB,
-                _resTokenA
-            );
-            uint256 toTreasuryTokenA = (tokenA_ *
-                feeRatesBasis[uint256(FEES.tokenABuyFee)]) / BASIS;
-            tokenA_ -= toTreasuryTokenA;
-            if (toTreasuryTokenA > 0) {
-                tokenA.safeTransfer(treasury, toTreasuryTokenA);
-            }
-            if (toTreasuryTokenB > 0) {
-                tokenB.safeTransfer(treasury, toTreasuryTokenB);
-            }
-            emit Fee(_buyer, toTreasuryTokenA, toTreasuryTokenB);
-        }
         tokenA.safeTransfer(_to, tokenA_);
+        if (feeA > 0) {
+            tokenA.safeTransfer(treasury, feeA);
+        }
+        if (feeB > 0) {
+            tokenB.safeTransfer(treasury, feeB);
+        }
+        emit Fee(_buyer, feeA, feeB);
         _updatePriceAccumulators();
         emit Swap(msg.sender, _tokenB, 0, 0, tokenA_);
         if (tokenA_ < _min) revert BelowMinimum(_min, tokenA_);
@@ -287,55 +268,27 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
         uint256 _tokenA,
         uint256 _min,
         address _to,
-        address _buyer,
-        uint256 _resTokenB,
-        uint256 _resTokenA
+        address _buyer
     ) private returns (uint256 tokenB_) {
-        // Transfer in tokenA
+        (uint256 output, uint256 feeA, uint256 feeB) = outputTokenB(
+            _tokenA,
+            false,
+            !hasRole(WHITELIST_ROLE, _buyer)
+        );
+        tokenB_ = output;
         tokenA.safeTransferFrom(_buyer, address(this), _tokenA);
-        if (hasRole(WHITELIST_ROLE, _buyer)) {
-            tokenB_ = getInputPrice(_tokenA, _resTokenA, _resTokenB);
-        } else {
-            //Check sell limit
-            if (!hasRole(NOSELLLIMIT_ROLE, _buyer)) {
-                bool prev24hours = block.timestamp -
-                    sellTracker[_buyer].lastSell <
-                    24 hours;
-
-                if (prev24hours) {
-                    if (sellTracker[_buyer].amountSold + _tokenA > maxDailySell)
-                        revert ExceedMaxDailySell();
-                    sellTracker[_buyer].amountSold += _tokenA;
-                } else {
-                    if (_tokenA > maxDailySell) revert ExceedMaxDailySell();
-                    sellTracker[_buyer].lastSell = block.timestamp;
-                    sellTracker[_buyer].amountSold = _tokenA;
-                }
-            }
-            //taxes
-            uint256 toTreasuryTokenA = (_tokenA *
-                feeRatesBasis[uint256(FEES.tokenASellFee)]) / BASIS;
-            tokenB_ = getInputPrice(
-                _tokenA - toTreasuryTokenA,
-                _resTokenA,
-                _resTokenB
-            );
-            uint256 toTreasuryTokenB = (tokenB_ *
-                feeRatesBasis[uint256(FEES.tokenBBuyFee)]) / BASIS;
-            tokenB_ -= toTreasuryTokenA;
-            if (toTreasuryTokenA > 0) {
-                tokenA.safeTransfer(treasury, toTreasuryTokenA);
-            }
-            if (toTreasuryTokenB > 0) {
-                tokenB.safeTransfer(treasury, toTreasuryTokenB);
-            }
-            emit Fee(_buyer, toTreasuryTokenA, toTreasuryTokenB);
-        }
-
-        if (tokenB_ < _min) revert BelowMinimum(_min, tokenB_);
         tokenB.safeTransfer(_to, tokenB_);
+        if (feeA > 0) {
+            tokenA.safeTransfer(treasury, feeA);
+        }
+        if (feeB > 0) {
+            tokenB.safeTransfer(treasury, feeB);
+        }
+        emit Fee(_buyer, feeA, feeB);
+
         _updatePriceAccumulators();
         emit Swap(_buyer, 0, _tokenA, tokenB_, 0);
+        if (tokenB_ < _min) revert BelowMinimum(_min, tokenB_);
     }
 
     function _updatePriceAccumulators() internal {
@@ -415,48 +368,82 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
      */
     function outputTokenA(
         uint256 _amount,
-        bool _isDesired
-    ) public view returns (uint256) {
-        if (_isDesired)
-            return
-                getOutputPrice(
-                    _amount,
-                    tokenB.balanceOf(address(this)),
-                    tokenA.balanceOf(address(this))
-                );
-        return
-            getInputPrice(
-                _amount,
+        bool _isDesired,
+        bool _withFee
+    ) public view returns (uint256 other_, uint256 feeA_, uint256 feeB_) {
+        if (_isDesired) {
+            feeA_ = _withFee
+                ? (_amount * feeRatesBasis[uint256(FEES.tokenABuyFee)]) / BASIS
+                : 0;
+            other_ = getOutputPrice(
+                _amount - feeA_,
                 tokenB.balanceOf(address(this)),
                 tokenA.balanceOf(address(this))
             );
+            feeB_ = _withFee
+                ? (other_ * feeRatesBasis[uint256(FEES.tokenBSellFee)]) / BASIS
+                : 0;
+            other_ += feeB_;
+            return (other_, feeA_, feeB_);
+        } else {
+            feeB_ =
+                (_amount * feeRatesBasis[uint256(FEES.tokenBSellFee)]) /
+                BASIS;
+            other_ = getInputPrice(
+                _amount - feeB_,
+                tokenB.balanceOf(address(this)),
+                tokenA.balanceOf(address(this))
+            );
+            feeA_ =
+                (other_ * feeRatesBasis[uint256(FEES.tokenABuyFee)]) /
+                BASIS;
+            other_ -= feeA_;
+            return (other_, feeA_, feeB_);
+        }
     }
 
     /// @notice same as outputTokenA function except it is based on getting back tokenB and inputting tokenA
     function outputTokenB(
         uint256 _amount,
-        bool _isDesired
-    ) public view returns (uint256) {
-        if (_isDesired)
-            return
-                getOutputPrice(
-                    _amount,
-                    tokenA.balanceOf(address(this)),
-                    tokenB.balanceOf(address(this))
-                );
-        return
-            getInputPrice(
-                _amount,
+        bool _isDesired,
+        bool _withFee
+    ) public view returns (uint256 other_, uint256 feeA_, uint256 feeB_) {
+        if (_isDesired) {
+            feeB_ = _withFee
+                ? (_amount * feeRatesBasis[uint256(FEES.tokenBBuyFee)]) / BASIS
+                : 0;
+            other_ = getOutputPrice(
+                _amount - feeB_,
                 tokenA.balanceOf(address(this)),
                 tokenB.balanceOf(address(this))
             );
+            feeA_ =
+                (other_ * feeRatesBasis[uint256(FEES.tokenASellFee)]) /
+                BASIS;
+            other_ += feeA_;
+            return (other_, feeA_, feeB_);
+        } else {
+            feeA_ =
+                (_amount * feeRatesBasis[uint256(FEES.tokenASellFee)]) /
+                BASIS;
+            other_ = getInputPrice(
+                _amount - feeA_,
+                tokenA.balanceOf(address(this)),
+                tokenB.balanceOf(address(this))
+            );
+            feeB_ =
+                (other_ * feeRatesBasis[uint256(FEES.tokenBBuyFee)]) /
+                BASIS;
+            other_ -= feeB_;
+            return (other_, feeA_, feeB_);
+        }
     }
 
     /// @notice get the _amount of liquidity that would be minted and tokens needed by inputing the _tokenBAmount
     /// @param _tokenBAmount Amount of tokenB tokens to use
     function getTokenBToLiquidityInputPrice(
         uint256 _tokenBAmount
-    ) external view returns (uint256 liquidityAmount_, uint256 tokenAAmount_) {
+    ) public view returns (uint256 liquidityAmount_, uint256 tokenAAmount_) {
         if (_tokenBAmount == 0) return (0, 0);
         uint256 total = totalSupply();
         // +1 is to offset any decimal issues
@@ -469,7 +456,7 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
     }
 
     /// @notice get the _amount of liquidity that would be minted and tokens needed by inputing the _tokenBAmount
-    /// @param _tokenAAmount Amount of tokenB tokens to use
+    /// @param _tokenAAmount Amount of tokenA tokens to use
     function getTokenToLiquidityInputPrice(
         uint256 _tokenAAmount
     ) external view returns (uint256 liquidityAmount_, uint256 tokenBAmount_) {
@@ -513,5 +500,9 @@ contract POLv2 is IPOL, ERC20Burnable, AccessControlEnumerable {
 
     function setMaxSell(uint256 _newMax) external onlyRole(MANAGER_ROLE) {
         maxDailySell = _newMax;
+    }
+
+    function setTreasury(address _to) external onlyRole(MANAGER_ROLE) {
+        treasury = _to;
     }
 }

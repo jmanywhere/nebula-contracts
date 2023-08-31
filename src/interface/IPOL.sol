@@ -32,11 +32,13 @@ interface IPOL {
 
     function outputTokenA(
         uint256 _amount,
-        bool _isDesired
-    ) external view returns (uint256);
+        bool _isDesired,
+        bool _withFee
+    ) external view returns (uint256 other_, uint256 feeA_, uint256 feeB_);
 
     function outputTokenB(
         uint256 _amount,
-        bool _isDesired
-    ) external view returns (uint256);
+        bool _isDesired,
+        bool _withFee
+    ) external view returns (uint256 other_, uint256 feeA_, uint256 feeB_);
 }
