@@ -104,6 +104,30 @@ contract TestPOLv2 is Test {
         pol.addLiquidity(_minLiquidity, _maxTokenA, 0);
     }
 
+    function testFuzz_removeLiquidityRevertIfInvalidAmount(
+        uint256 _tokenA,
+        uint256 _tokenB
+    ) public {
+        vm.expectRevert(InvalidArguments.selector);
+        pol.removeLiquidity(0, _tokenB, _tokenA);
+    }
+
+    function testFuzz_removeLiquidityRevertIfInvalidTokenA(
+        uint256 _amount,
+        uint256 _tokenA
+    ) public {
+        vm.expectRevert(InvalidArguments.selector);
+        pol.removeLiquidity(_amount, 0, _tokenA);
+    }
+
+    function testFuzz_removeLiquidityRevertIfInvalidTokenB(
+        uint256 _amount,
+        uint256 _tokenB
+    ) public {
+        vm.expectRevert(InvalidArguments.selector);
+        pol.removeLiquidity(_amount, _tokenB, 0);
+    }
+
     function testFuzz_addLiquidityRevertIfInvalidInitialLiquidityTokenA(
         uint256 _minLiquidity,
         uint256 _maxTokenA,
@@ -475,5 +499,49 @@ contract TestPOLv2 is Test {
         assertApproxEqAbs(tokenBBal1 - tokenBBal0, expectedOutputTokenB, 10);
         assertApproxEqAbs(tokenABal0 - tokenABal1, swapWadTokenAInput, 10);
         assertApproxEqAbs(invariant0, invariant, 10 ** 9);
+    }
+
+    function test_addLiquidityAboveMaximumTokenA() public {
+        pol.addLiquidity(1 ether, 2 ether, 1 ether);
+        address user = users[0];
+        vm.prank(user);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                AboveMaximum.selector,
+                0.5 ether,
+                2 ether + 1
+            )
+        );
+        pol.addLiquidity(1, 0.5 ether, 1 ether);
+    }
+
+    function test_addLiquidityBelowMinLiquidity() public {
+        pol.addLiquidity(1 ether, 2 ether, 1 ether);
+        address user = users[0];
+        vm.prank(user);
+        vm.expectRevert(
+            abi.encodeWithSelector(BelowMinimum.selector, 2.1 ether, 2 ether)
+        );
+        pol.addLiquidity(2.1 ether, 4 ether + 1, 2 ether);
+    }
+
+    function test_removeLiquidityBelowMinimumTokenB() public {
+        pol.addLiquidity(1 ether, 2 ether, 1 ether);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                BelowMinimum.selector,
+                0.5 ether,
+                0.5 ether + 1
+            )
+        );
+        pol.removeLiquidity(0.5 ether, 0.5 ether + 1, 1 ether);
+    }
+
+    function test_removeLiquidityBelowMinimumTokenA() public {
+        pol.addLiquidity(1 ether, 2 ether, 1 ether);
+        vm.expectRevert(
+            abi.encodeWithSelector(BelowMinimum.selector, 1 ether, 1 ether + 1)
+        );
+        pol.removeLiquidity(0.5 ether, 0.5 ether, 1 ether + 1);
     }
 }
