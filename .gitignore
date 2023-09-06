@@ -24,4 +24,5 @@ typechain-types
 # Hardhat files
 cache
 artifacts
-
+uri/
+AllData.json
