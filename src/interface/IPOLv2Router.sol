@@ -16,4 +16,6 @@ interface IPOLv2Router is IAmmRouter02 {
         external
         view
         returns (uint16 buyFee, uint16 sellFee, uint256 maxDailySell);
+
+    function isExempt(address sender) external view returns (bool);
 }

@@ -35,7 +35,7 @@ library POLv2Library {
                             hex"ff",
                             factory,
                             keccak256(abi.encodePacked(token0, token1)),
-                            hex"1d855a5e32fa5b3d03d75feee72e66be10efff7ce9e983f152e94dec9eef56dc" // init code hash
+                            hex"82d5ce33a9e77d52a97019107d81c0aa7eaae9b7dde0b29944f66b1b5282bbc6" // init code hash
                         )
                     )
                 )

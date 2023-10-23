@@ -292,10 +292,14 @@ contract POLv2Pair is IAmmPair, AmmERC20 {
         address receiver,
         uint256 outWad
     ) internal {
-        (uint16 buyFee, , ) = IPOLv2Router(IPOLv2Factory(factory).router())
-            .getFees(IERC20(token));
-        uint256 fee = (outWad * buyFee) / 10000;
-        IERC20(token).safeTransfer(IAmmFactory(factory).feeTo(), fee);
-        IERC20(token).safeTransfer(receiver, outWad - fee);
+        IPOLv2Router router = IPOLv2Router(IPOLv2Factory(factory).router());
+        if (router.isExempt(msg.sender)) {
+            IERC20(token).safeTransfer(receiver, outWad);
+        } else {
+            (uint16 buyFee, , ) = router.getFees(IERC20(token));
+            uint256 fee = (outWad * buyFee) / 10000;
+            IERC20(token).safeTransfer(IAmmFactory(factory).feeTo(), fee);
+            IERC20(token).safeTransfer(receiver, outWad - fee);
+        }
     }
 }

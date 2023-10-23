@@ -41,6 +41,8 @@ contract POLv2Router is IPOLv2Router, AccessControlEnumerable {
     // Taxes are divided BASIS
     uint256 public constant BASIS = 10000;
     mapping(IERC20 => TokenFees) public tokenFees;
+    mapping(IERC20 => bool) public hasFeesSet;
+    mapping(address => bool) public isExempt;
 
     modifier ensure(uint256 deadline) {
         require(deadline >= block.timestamp, "AmmRouter: EXPIRED");
@@ -71,6 +73,14 @@ contract POLv2Router is IPOLv2Router, AccessControlEnumerable {
         // create the pair if it doesn't exist yet
         if (IAmmFactory(factory).getPair(tokenA, tokenB) == address(0)) {
             IAmmFactory(factory).createPair(tokenA, tokenB);
+            if (!hasFeesSet[IERC20(tokenA)]) {
+                hasFeesSet[IERC20(tokenA)] = true;
+                _setFees(IERC20(tokenA), 0, 0, type(uint224).max);
+            }
+            if (!hasFeesSet[IERC20(tokenB)]) {
+                hasFeesSet[IERC20(tokenB)] = true;
+                _setFees(IERC20(tokenB), 0, 0, type(uint224).max);
+            }
         }
         (uint256 reserveA, uint256 reserveB) = POLv2Library.getReserves(
             factory,
@@ -712,6 +722,38 @@ contract POLv2Router is IPOLv2Router, AccessControlEnumerable {
         );
     }
 
+    function setFees(
+        IERC20 token,
+        uint16 buyFee,
+        uint16 sellFee,
+        uint224 maxDailySell
+    ) external {
+        require(
+            msg.sender == IAmmFactory(factory).feeToSetter(),
+            "Not feetosetter"
+        );
+        _setFees(token, buyFee, sellFee, maxDailySell);
+    }
+
+    function setIsExempt(address sender, bool to) external {
+        require(
+            msg.sender == IAmmFactory(factory).feeToSetter(),
+            "Not feetosetter"
+        );
+        isExempt[sender] = to;
+    }
+
+    function _setFees(
+        IERC20 token,
+        uint16 buyFee,
+        uint16 sellFee,
+        uint224 maxDailySell
+    ) internal {
+        tokenFees[token].buyFee = buyFee;
+        tokenFees[token].sellFee = sellFee;
+        tokenFees[token].maxDailySell = maxDailySell;
+    }
+
     function _safeTransferFromWithSellFee(
         IERC20 token,
         address receiver,
@@ -719,7 +761,7 @@ contract POLv2Router is IPOLv2Router, AccessControlEnumerable {
     ) internal {
         Sells storage sells = sellTracker[token][msg.sender];
         TokenFees storage fees = tokenFees[token];
-        if (sells.lastSell + 24 hours < block.timestamp) {
+        if (sells.lastSell + 24 hours > block.timestamp) {
             //Still in daily sell limit
             sells.amountSold += inWad;
         } else {
@@ -728,10 +770,10 @@ contract POLv2Router is IPOLv2Router, AccessControlEnumerable {
         }
         sells.lastSell = block.timestamp;
         require(
-            sells.amountSold <= fees.maxDailySell,
+            isExempt[msg.sender] || sells.amountSold <= fees.maxDailySell,
             "POLv2: Exceed max daily sell"
         );
-        uint256 fee = (inWad * fees.sellFee) / BASIS;
+        uint256 fee = isExempt[msg.sender] ? 0 : (inWad * fees.sellFee) / BASIS;
         token.safeTransferFrom(msg.sender, IAmmFactory(factory).feeTo(), fee);
         token.safeTransferFrom(msg.sender, receiver, inWad - fee);
     }
